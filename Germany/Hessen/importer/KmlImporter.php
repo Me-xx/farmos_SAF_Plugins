@@ -1,5 +1,5 @@
 <?php
-/**
+/*
 Handels parts like
 				<Data name="lage_bez">
 					<value>Schießloch</value>
@@ -9,7 +9,7 @@ as Name And
 					<value>DEHELI0006305492</value>
 				</Data>
 as Notes
-**/
+*/
 declare(strict_types=1);
 
 namespace Drupal\farm_import_kml\Form;
@@ -69,6 +69,18 @@ class KmlImporter extends FormBase {
     $this->serializer = $serializer;
     $this->fileSystem = $file_system;
   }
+
+	protected function extractExtendedData(\SimpleXMLElement $placemark): array {
+	  $data = [];
+	  foreach ($placemark->ExtendedData->Data as $entry) {
+		$name = (string) $entry['name'];
+		$value = trim((string) $entry->value);
+		if ($value !== '') {
+		  $data[$name] = $value;
+		}
+	  }
+	  return $data;
+	}
 
   /**
    * {@inheritdoc}
@@ -181,6 +193,33 @@ class KmlImporter extends FormBase {
     ];
     foreach ($geometries as $index => $geometry) {
 
+        // Versuche das zugehörige Placemark aus dem KML zu holen
+        $placemarks = new \SimpleXMLElement($data);
+        $placemark = $placemarks->Document->Placemark[$index] ?? null;
+
+        $extended = $placemark ? $this->extractExtendedData($placemark) : [];
+
+        // Mapping für ncode_aktu
+        if (isset($extended['ncode_aktu'])) {
+          $map = ['459' => 'Paddock', '480' => 'Landmark'];
+          $extended['ncode_aktu_mapped'] = $map[$extended['ncode_aktu']] ?? $extended['ncode_aktu'];
+        }
+
+        // Hinweise als XML zusammenbauen
+        $notes = '';
+        foreach ($extended as $key => $value) {
+          if (!str_contains($key, '_mapped') && $key !== 'lage_bez') {
+            $notes .= "<Data name=\"$key\"><value>$value</value></Data>\n";
+          }
+        }
+
+        // Überschreibe Name, falls lage_bez vorhanden
+        $name = $extended['lage_bez'] ?? ($geometry->properties['name'] ?? '');
+
+        // Notes überschreiben
+        $description = $notes ?: ($geometry->properties['description'] ?? '');
+
+
       // Create a fieldset for the geometry.
       $form['output']['assets'][$index] = [
         '#type' => 'fieldset',
@@ -190,7 +229,7 @@ class KmlImporter extends FormBase {
       $form['output']['assets'][$index]['name'] = [
         '#type' => 'textfield',
         '#title' => $this->t('Name'),
-        '#default_value' => $geometry->properties['name'] ?? '',
+        '#default_value' => $name ?? '',
         '#required' => TRUE,
       ];
 
@@ -205,7 +244,7 @@ class KmlImporter extends FormBase {
       $form['output']['assets'][$index]['notes'] = [
         '#type' => 'textarea',
         '#title' => $this->t('Notes'),
-        '#default_value' => $geometry->properties['description'] ?? '',
+        '#default_value' => $description ?? '',
       ];
 
       $form['output']['assets'][$index]['geometry'] = [
